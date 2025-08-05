@@ -1,0 +1,27 @@
+import yfinance as yf
+import pandas as pd
+
+def fetch_stock_data(ticker: str = "NVDA", period: str = "60d", interval: str = "1d") -> pd.DataFrame:
+    """
+    Fetch historical stock data using yfinance.
+
+    Args:
+        ticker (str): Stock ticker symbol, default is 'NVDA'.
+        period (str): Period of historical data to retrieve (e.g., '60d', '1y').
+        interval (str): Data interval (e.g., '1d' for daily, '1h' for hourly).
+
+    Returns:
+        pd.DataFrame: Historical stock data.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period=period, interval=interval)
+        hist.reset_index(inplace=True)
+        return hist
+    except Exception as e:
+        print(f"Error fetching data for {ticker}: {e}")
+        return pd.DataFrame()
+
+# Example usage
+nvda_data = fetch_stock_data()
+print(nvda_data.head())
