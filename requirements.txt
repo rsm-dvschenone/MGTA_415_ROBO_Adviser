@@ -1,0 +1,8 @@
+yfinance
+textblob
+ta
+smtplib
+email
+requests
+twilio
+python-dotenv
