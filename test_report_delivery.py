@@ -15,9 +15,15 @@ mock_data = {
 }
 
 if __name__ == "__main__":
+    # 1. Generate report
     report = generate_report(mock_data)
     print(report)
 
+    # 2. Send via email
     send_email_via_smtp(report)
+
+    # 3. Send via Slack
     send_slack_message(report)
+
+    # 4. Send via SMS
     send_sms_via_twilio(report)
