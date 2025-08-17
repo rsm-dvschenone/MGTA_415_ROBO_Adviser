@@ -32,3 +32,16 @@ outputs/
 *.safetensors
 *.pt
 *.onnx
+
+models/
+outputs/
+!.gitkeep
+.env
+**/__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+*.safetensors
+*.bin
+*.pt
+*.onnx
