@@ -6,3 +6,18 @@ email
 requests
 twilio
 python-dotenv
+# Core runtime
+pandas>=2.0
+numpy>=1.26
+
+# Reddit collection
+praw>=7.7
+python-dotenv>=1.0
+
+# NLP sentiment (FinBERT)
+transformers>=4.41
+torch>=2.2
+
+# Utilities
+tqdm>=4.66
+requests>=2.31
