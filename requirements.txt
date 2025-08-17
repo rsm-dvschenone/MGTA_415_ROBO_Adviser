@@ -6,18 +6,32 @@
 # requests
 # twilio
 # python-dotenv
-# Core runtime
+# === Core analysis (used today) ===
 pandas>=2.0
-numpy>=1.26
+numpy>=1.24
 
-# Reddit collection
-praw>=7.7
+# Sentiment fallback
+vaderSentiment>=3.3.2
+
+# FinBERT (AI/ML)
+transformers>=4.40
+torch>=2.3
+safetensors>=0.4
+huggingface_hub>=0.22
+tokenizers>=0.19
+
+# === Optional (for .env handling of API keys) ===
 python-dotenv>=1.0
 
-# NLP sentiment (FinBERT)
-transformers>=4.41
-torch>=2.2
-
-# Utilities
-tqdm>=4.66
+# === Collectors (only if/when you wire data collection) ===
+# Reddit:
+praw>=7.7
+# News / web utils:
 requests>=2.31
+beautifulsoup4>=4.12
+lxml>=5.0
+# SEC filings helper (optional — one popular helper lib):
+sec-edgar-downloader>=5.0
+tenacity>=8.2
+# Prices:
+yfinance>=0.2.40
