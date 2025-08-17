@@ -2,60 +2,53 @@
 """
 data_collection/reddit.py
 -------------------------
-Collect Reddit posts via the official Reddit API using PRAW.
-Returns a list[dict] with consistent keys for downstream analysis.
+Simplified Reddit collector using PRAW with **inline credentials**.
+(You said you'll secure this later; this is for getting your analysis unblocked.)
 
-Auth:
-  Provide env vars (recommended) or a .env file at project root:
-    - REDDIT_CLIENT_ID
-    - REDDIT_CLIENT_SECRET
-    - REDDIT_USER_AGENT   (e.g., "msba-project-bot/0.1 by <your_reddit_username>")
-
-Quick start (CLI):
-    python -m data_collection.reddit --subreddits stocks,investing --query nvidia --limit 100
+Usage (CLI):
+    python -m data_collection.reddit --subreddits stocks,investing --query nvidia --limit 50 --time_filter week
 """
-from __future__ import annotations
 
-import os
-import time
 import argparse
-from typing import List, Dict, Any, Optional, Iterable, Union
+import time
+from typing import List, Dict, Any, Iterable, Union, Optional
 
-try:
-    from dotenv import load_dotenv  # optional, but nice for local dev
-except Exception:
-    load_dotenv = None  # type: ignore
-
-try:
-    import praw
-except Exception as e:
-    raise ImportError("praw is required for reddit collection. Try: pip install praw python-dotenv") from e
+import praw
 
 
-def _init_reddit():
-    # Load .env if available
-    if load_dotenv:
-        load_dotenv()
+# ====== INLINE CREDENTIALS (temporary for school project) ======
+CLIENT_ID = "PaRTKKaXCdxW5q6biYW5zy0t4EY1Lw"
+CLIENT_SECRET = "EfrdPP2uPFX7xv-nMNKCFQ"
+USER_AGENT = "script:nvda-bot:0.1 (by u/dschenone22)"
+USERNAME = "dschenone22"
+PASSWORD = "giggle15"
+# ===============================================================
 
-    cid = os.getenv("REDDIT_CLIENT_ID")
-    csec = os.getenv("REDDIT_CLIENT_SECRET")
-    uagent = os.getenv("REDDIT_USER_AGENT", "msba-project-bot/0.1")
-    if not cid or not csec:
-        raise RuntimeError(
-            "Missing Reddit API credentials. Set REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET "
-            "as environment variables or in a .env file."
+
+def _init_reddit() -> "praw.Reddit":
+    # If USERNAME/PASSWORD are present, authenticate with password grant (user context).
+    # Otherwise, use app-only read-only.
+    if USERNAME and PASSWORD:
+        reddit = praw.Reddit(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            user_agent=USER_AGENT,
+            username=USERNAME,
+            password=PASSWORD,
+            check_for_async=False,
         )
-    reddit = praw.Reddit(
-        client_id=cid,
-        client_secret=csec,
-        user_agent=uagent,
-        check_for_async=False,
-    )
+    else:
+        reddit = praw.Reddit(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            user_agent=USER_AGENT,
+            check_for_async=False,
+        )
+        reddit.read_only = True
     return reddit
 
 
 def _normalize_submission(sub) -> Dict[str, Any]:
-    # PRAW objects have many attributes; we extract the ones we need.
     body = getattr(sub, "selftext", "") or ""
     return {
         "id": sub.id,
@@ -75,17 +68,18 @@ def _normalize_submission(sub) -> Dict[str, Any]:
 def get_reddit_posts(
     subreddits: Union[str, Iterable[str]] = "stocks",
     query: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 100,
     time_filter: str = "week",   # one of: "all","day","hour","month","week","year"
     sort: str = "relevance",     # "relevance","hot","top","new","comments"
     min_score: int = 0,
-) -> List[Dict[str, Any]]:
+    return_strings: bool = True, # if True -> list[str]; else list[dict]
+) -> List[Union[str, Dict[str, Any]]]:
     """
-    Fetch posts from one or more subreddits. If `query` is provided, uses Reddit search.
-    Otherwise pulls from 'hot' for each subreddit.
+    Fetch posts from one or more subreddits. If `query` is provided, uses subreddit search;
+    otherwise pulls from 'hot'.
 
-    Returns a list of dicts with keys: id, subreddit, title, body, text, score, num_comments,
-    created_utc, author, url, permalink.
+    If return_strings=True (default), returns list[str] combining title/body (good for sentiment).
+    If False, returns list[dict] with rich metadata.
     """
     reddit = _init_reddit()
 
@@ -99,59 +93,46 @@ def get_reddit_posts(
 
     for sub_name in sub_list:
         sub = reddit.subreddit(sub_name)
-        try:
-            if query:
-                # Reddit search
-                # PRAW search supports limit, sort, time_filter
-                it = sub.search(query=query, sort=sort, time_filter=time_filter, limit=per_sub_limit)
-            else:
-                # Without a query, fall back to hot (or new/top if you prefer)
-                it = sub.hot(limit=per_sub_limit)
-            for submission in it:
-                d = _normalize_submission(submission)
-                if d["score"] < min_score:
-                    continue
-                results.append(d)
-        except Exception as e:
-            # Basic resilience: continue on subreddit error
-            print(f"[WARN] Failed fetching from r/{sub_name}: {e}")
-            continue
-        # brief pause to be gentle
-        time.sleep(0.5)
+        if query:
+            it = sub.search(query=query, sort=sort, time_filter=time_filter, limit=per_sub_limit)
+        else:
+            it = sub.hot(limit=per_sub_limit)
+        for submission in it:
+            d = _normalize_submission(submission)
+            if d["score"] < min_score:
+                continue
+            results.append(d)
+        time.sleep(0.4)  # be gentle
 
+    if return_strings:
+        return [r["text"] for r in results if r.get("text")]
     return results
 
 
 def _cli():
-    p = argparse.ArgumentParser(description="Collect Reddit posts into a JSONL file or stdout.")
-    p.add_argument("--subreddits", type=str, default="stocks", help="Comma-separated list, e.g., 'stocks,investing'")
+    p = argparse.ArgumentParser(description="Collect Reddit posts (inline-credential version).")
+    p.add_argument("--subreddits", type=str, default="stocks", help="Comma-separated, e.g., 'stocks,investing'")
     p.add_argument("--query", type=str, default=None, help="Optional search query")
-    p.add_argument("--limit", type=int, default=200, help="Total posts across subreddits")
+    p.add_argument("--limit", type=int, default=50, help="Total posts across subreddits")
     p.add_argument("--time_filter", type=str, default="week", choices=["all","day","hour","month","week","year"])
     p.add_argument("--sort", type=str, default="relevance", choices=["relevance","hot","top","new","comments"])
     p.add_argument("--min_score", type=int, default=0)
-    p.add_argument("--out", type=str, default=None, help="Optional path to write JSONL")
+    p.add_argument("--return_strings", action="store_true", help="Return list[str] instead of list[dict]")
     args = p.parse_args()
 
-    posts = get_reddit_posts(
+    out = get_reddit_posts(
         subreddits=args.subreddits,
         query=args.query,
         limit=args.limit,
         time_filter=args.time_filter,
         sort=args.sort,
         min_score=args.min_score,
+        return_strings=args.return_strings or True,  # default True
     )
-
-    if args.out:
-        import json
-        with open(args.out, "w", encoding="utf-8") as f:
-            for row in posts:
-                f.write(json.dumps(row, ensure_ascii=False) + "\n")
-        print(f"Wrote {len(posts)} posts to {args.out}")
-    else:
-        from pprint import pprint
-        print(f"Collected {len(posts)} posts")
-        pprint(posts[:3])  # preview
+    print(f"Collected {len(out)} items")
+    if out:
+        # preview
+        print(out[0][:500] if isinstance(out[0], str) else out[0])
 
 
 if __name__ == "__main__":

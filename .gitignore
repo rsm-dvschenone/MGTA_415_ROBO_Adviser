@@ -25,4 +25,10 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
-/storage/
+/storage/models/
+outputs/
+.env
+*.bin
+*.safetensors
+*.pt
+*.onnx

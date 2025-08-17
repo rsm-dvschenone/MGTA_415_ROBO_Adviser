@@ -2,44 +2,48 @@
 """
 reddit_post_analysis.py
 -----------------------
-FinBERT-powered sentiment analysis for Reddit posts.
+Sentiment analysis for Reddit posts with two backends:
+  - FinBERT (ProsusAI/finbert) via Hugging Face Transformers (preferred when available)
+  - VADER (lightweight fallback) when transformers/torch/model download are unavailable
 
-Usage (module):
+Usage:
     from reddit_post_analysis import analyze_reddit_sentiment
+    res = analyze_reddit_sentiment(posts_list, backend="auto")
+    print(res["summary"])
 
-    results = analyze_reddit_sentiment(posts_list)
-    print(results["summary"])
+Backends:
+    backend="auto"  -> try FinBERT, else VADER
+    backend="finbert" -> require FinBERT
+    backend="vader"   -> force VADER fallback
 
-Notes:
-  - Requires: transformers (and a backend like torch). First time will download the model.
-  - Model: ProsusAI/finbert (financial-domain BERT fine-tuned for sentiment).
-  - Input flexibility: Accepts a list of strings, or dicts with keys like
-        {"text": "...", "score": 123} or {"title": "...", "body": "...", "upvotes": 99}
-  - Weighting: If a numeric field like "score"/"upvotes" is present, it is used as a weight (optional).
-  - Output: Aggregates counts, weighted net score (-1..+1), and returns per-item predictions.
+Install (for FinBERT):
+    pip install transformers torch --upgrade
 
-(c) Your team – MIT / Apache2 style licensing is fine if you want to open-source.
+Install (for VADER):
+    pip install vaderSentiment
+
+    
+INPUT SHAPE (posts):
+- list[str] OR list[dict] with:
+  - text (str)   REQUIRED
+  - score (int)  OPTIONAL (weights sentiment)
+Example: [{"text":"NVDA lifts guidance...", "score":124}]
+
 """
+
 from __future__ import annotations
+import os
+os.environ.setdefault("TRANSFORMERS_NO_TORCHVISION", "1")
 
 import re
-from dataclasses import dataclass
 from typing import List, Dict, Any, Union, Optional, Tuple
-
-# We import lazily so downstream code can import this module even if transformers isn't installed yet.
-_TRANSFORMERS_OK = True
-try:
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-except Exception:
-    _TRANSFORMERS_OK = False
 
 LABELS = ("positive", "neutral", "negative")
 LABEL_TO_SCORE = {"positive": 1.0, "neutral": 0.0, "negative": -1.0}
-
 URL_RE = re.compile(r"https?://\S+|www\.\S+", re.IGNORECASE)
 
+# ------- helpers -------
 def _clean_text(s: str) -> str:
-    # Strip URLs and extra whitespace; keep finance tickers/slang intact for FinBERT.
     s = URL_RE.sub("", s or "")
     return " ".join(s.split()).strip()
 
@@ -48,7 +52,6 @@ def _extract_text_and_weight(item: Union[str, Dict[str, Any]]) -> Optional[Tuple
         text = _clean_text(item)
         return (text, 1.0) if text else None
     if isinstance(item, dict):
-        # Prefer explicit "text"; else combine typical reddit fields.
         text = item.get("text")
         if not text:
             title = item.get("title", "") or ""
@@ -62,19 +65,19 @@ def _extract_text_and_weight(item: Union[str, Dict[str, Any]]) -> Optional[Tuple
             weight = item.get("score") or item.get("upvotes") or 1.0
         try:
             w = float(weight)
-            if not (w == w) or w <= 0:  # NaN or non-positive -> default
+            if not (w == w) or w <= 0:
                 w = 1.0
         except Exception:
             w = 1.0
         return (text, w)
-    # Unknown type
     return None
 
+# ------- FinBERT backend -------
 def _load_finbert_pipeline(model_name: str = "ProsusAI/finbert", device: Optional[int] = None):
-    if not _TRANSFORMERS_OK:
-        raise ImportError(
-            "transformers is required. Try: pip install transformers torch --upgrade"
-        )
+    try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+    except Exception as e:
+        raise ImportError("transformers is required for FinBERT. Install with: pip install transformers torch --upgrade") from e
     tok = AutoTokenizer.from_pretrained(model_name)
     mdl = AutoModelForSequenceClassification.from_pretrained(model_name)
     clf = pipeline(
@@ -84,34 +87,46 @@ def _load_finbert_pipeline(model_name: str = "ProsusAI/finbert", device: Optiona
         truncation=True,
         return_all_scores=True,
         top_k=None,
-        device=device if device is not None else -1,  # -1 CPU, or CUDA device id
+        device=device if device is not None else -1,
     )
     return clf
 
-def _dist_from_pipeline_output(one: Any) -> Dict[str, float]:
-    """
-    Pipeline with return_all_scores=True returns a list[dict] per input where each dict
-    has keys: {'label': str, 'score': float}. We normalize labels to lower-case.
-    """
-    dist: Dict[str, float] = {}
-    if isinstance(one, list):
-        for d in one:
-            lab = str(d.get("label", "")).lower()
-            sc = float(d.get("score", 0.0))
-            dist[lab] = sc
-    elif isinstance(one, dict):  # fallback if pipeline returns single dict
-        lab = str(one.get("label", "")).lower()
-        sc = float(one.get("score", 0.0))
-        dist[lab] = sc
-    # Ensure all expected labels exist; fill missing with 0
-    for lab in LABELS:
-        dist.setdefault(lab, 0.0)
-    # Re-normalize in case of drift
-    s = sum(dist.values()) or 1.0
-    for k in list(dist.keys()):
-        dist[k] = dist[k] / s
-    return dist
+def _finbert_scores(texts: List[str], *, batch_size: int, device: Optional[int]) -> List[Dict[str, float]]:
+    clf = _load_finbert_pipeline(device=device)
+    out = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i+batch_size]
+        preds = clf(batch)
+        # normalize to dict[label]=prob
+        for raw in preds:
+            dist: Dict[str, float] = {d["label"].lower(): float(d["score"]) for d in raw}
+            for lab in LABELS:
+                dist.setdefault(lab, 0.0)
+            s = sum(dist.values()) or 1.0
+            for k in list(dist.keys()):
+                dist[k] = dist[k] / s
+            out.append(dist)
+    return out
 
+# ------- VADER backend -------
+def _vader_scores(texts: List[str]) -> List[Dict[str, float]]:
+    try:
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+    except Exception as e:
+        raise ImportError("vaderSentiment is required for VADER fallback. Install with: pip install vaderSentiment") from e
+    sid = SentimentIntensityAnalyzer()
+    outs: List[Dict[str, float]] = []
+    for t in texts:
+        vs = sid.polarity_scores(t)  # {'neg':x, 'neu':y, 'pos':z, 'compound':c}
+        # Map to FinBERT-style labels
+        dist = {"positive": float(vs.get("pos", 0.0)), "neutral": float(vs.get("neu", 0.0)), "negative": float(vs.get("neg", 0.0))}
+        s = sum(dist.values()) or 1.0
+        for k in list(dist.keys()):
+            dist[k] = dist[k] / s
+        outs.append(dist)
+    return outs
+
+# ------- main API -------
 def analyze_reddit_sentiment(
     posts: List[Union[str, Dict[str, Any]]],
     *,
@@ -122,19 +137,18 @@ def analyze_reddit_sentiment(
     min_chars: int = 10,
     batch_size: int = 16,
     include_items: bool = True,
+    backend: str = "auto",   # "auto" | "finbert" | "vader"
 ) -> Dict[str, Any]:
     """
-    Run FinBERT over a list of reddit posts (strings or dicts). Returns an aggregate summary and per-item predictions.
-
     Returns dict with keys:
       - summary: {total_posts, analyzed, positive, neutral, negative, share_positive, share_negative,
-                  weighted_net, avg_sentiment, examples: {positive, negative}}
-      - items: list of {text, weight, label, scores:{pos,neu,neg}} (if include_items)
+                  weighted_net, avg_sentiment, examples: {positive, negative}, backend}
+      - items: list of {text, weight, label, scores:{positive,neutral,negative}} (if include_items)
     """
     if not posts:
-        return {"summary": {"total_posts": 0, "analyzed": 0}, "items": []}
+        return {"summary": {"total_posts": 0, "analyzed": 0, "backend": backend}, "items": []}
 
-    # Normalize and (optional) keyword filter
+    # Normalize & filter
     norm: List[Tuple[str, float]] = []
     kw = [k.lower() for k in (filter_keywords or [])]
     for it in posts:
@@ -156,36 +170,39 @@ def analyze_reddit_sentiment(
                 "total_posts": total_posts,
                 "analyzed": 0,
                 "note": "No posts matched filters / min length.",
+                "backend": backend,
             },
             "items": [],
         }
 
-    clf = _load_finbert_pipeline(model_name=model_name, device=device)
-
     texts = [t for (t, _) in norm]
     weights = [w for (_, w) in norm]
 
-    # Batch the inputs for efficiency
-    preds: List[Any] = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        preds.extend(clf(batch))
+    # Choose backend
+    chosen = backend
+    scores: List[Dict[str, float]] = []
+    if backend == "finbert":
+        scores = _finbert_scores(texts, batch_size=batch_size, device=device)
+    elif backend == "vader":
+        scores = _vader_scores(texts)
+    else:  # auto
+        try:
+            scores = _finbert_scores(texts, batch_size=batch_size, device=device)
+            chosen = "finbert"
+        except Exception:
+            scores = _vader_scores(texts)
+            chosen = "vader"
 
+    # Aggregate
     items = []
     pos = neu = neg = 0
-    # For weighted metrics
     w_total = 0.0
     w_net = 0.0
-
-    # Track best examples
-    best_pos = (None, -1.0)  # (text, confidence)
+    best_pos = (None, -1.0)
     best_neg = (None, -1.0)
 
-    for (text, w), raw in zip(norm, preds):
-        dist = _dist_from_pipeline_output(raw)
-        # Pick label by argmax
+    for (text, w), dist in zip(norm, scores):
         label = max(dist, key=dist.get)
-        # Unweighted counts
         if label == "positive":
             pos += 1
             if dist["positive"] > best_pos[1]:
@@ -196,7 +213,7 @@ def analyze_reddit_sentiment(
                 best_neg = (text, dist["negative"])
         else:
             neu += 1
-        # Weighted net (positive minus negative)
+
         if use_weight:
             w_total += w
             w_net += w * (LABEL_TO_SCORE["positive"] * dist["positive"] +
@@ -218,7 +235,7 @@ def analyze_reddit_sentiment(
 
     share_pos = pos / analyzed_n if analyzed_n else 0.0
     share_neg = neg / analyzed_n if analyzed_n else 0.0
-    avg_sent = (w_net / w_total) if w_total else 0.0  # in [-1, 1]
+    avg_sent = (w_net / w_total) if w_total else 0.0
 
     summary = {
         "total_posts": total_posts,
@@ -230,21 +247,17 @@ def analyze_reddit_sentiment(
         "share_negative": round(share_neg, 3),
         "weighted_net": round(w_net, 4),
         "avg_sentiment": round(avg_sent, 4),
-        "examples": {
-            "positive": best_pos[0],
-            "negative": best_neg[0],
-        },
+        "examples": {"positive": best_pos[0], "negative": best_neg[0]},
+        "backend": chosen,
     }
-
     return {"summary": summary, "items": items if include_items else None}
 
 if __name__ == "__main__":
-    # Simple CLI demo: put your posts in a JSON file or edit the list below.
-    demo_posts = [
+    demo = [
         "NVIDIA crushes earnings again; datacenter demand is off the charts.",
         "I think NVDA valuation is insane right now, stay cautious.",
         "Neutral take: waiting for next quarter guidance.",
     ]
-    out = analyze_reddit_sentiment(demo_posts)
+    out = analyze_reddit_sentiment(demo, backend="auto")
     from pprint import pprint
     pprint(out["summary"])

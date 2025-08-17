@@ -1,11 +1,11 @@
-yfinance
-textblob
-ta
-smtplib
-email
-requests
-twilio
-python-dotenv
+# yfinance
+# textblob
+# ta
+# smtplib
+# email
+# requests
+# twilio
+# python-dotenv
 # Core runtime
 pandas>=2.0
 numpy>=1.26
