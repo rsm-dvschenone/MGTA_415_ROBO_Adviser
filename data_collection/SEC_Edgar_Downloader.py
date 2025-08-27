@@ -1,13 +1,14 @@
 """
-SEC Risk Factors / Market Risk Extractor (refactored, resilient, SGML-aware, year-filtered)
+SEC Risk Factors / Market Risk Extractor (SGML-aware, TOC-proof, strict headings, year-filtered)
 
 Pulls latest and previous SEC EDGAR filings for a ticker (10-K / 10-Q), extracts:
   - Item 1A. Risk Factors (preferred), or
   - Item 3. Quantitative and Qualitative Disclosures About Market Risk (fallback for 10-Q),
+
 and returns:
     (current_text, previous_text, metadata_current, metadata_previous)
 
-CLI:
+CLI example:
     python data_collection/SEC_Edgar_Downloader.py \
         --ticker NVDA --form 10-Q --email dvschenone@ucsd.edu \
         --section auto --min-year 2019
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from inspect import signature
 from pathlib import Path
-from typing import List, Optional, Tuple, Pattern, Callable
+from typing import Callable, List, Optional, Pattern, Tuple
 
 from bs4 import BeautifulSoup
 from sec_edgar_downloader import Downloader
@@ -50,14 +51,13 @@ def _normalize_form(form: str) -> str:
 
 def _parse_year_from_accession_dir(dirname: str) -> Optional[int]:
     """
-    Accession dir examples: 0001012870-99-001954 -> 1999
-                            0001045810-24-000067 -> 2024
+    Accession examples: 0001012870-99-001954 -> 1999; 0001045810-24-000067 -> 2024
     """
     m = re.search(r"-(\d{2})-", dirname)
     if not m:
         return None
     yy = int(m.group(1))
-    return 1900 + yy if yy >= 70 else 2000 + yy  # pivot at 1970
+    return 1900 + yy if yy >= 70 else 2000 + yy
 
 
 # ----------------------------
@@ -103,7 +103,7 @@ def _score_doc_name(p: Path) -> int:
 
 
 def _best_doc_in_accession(dir_path: Path) -> Optional[Path]:
-    """Prefer HTML/HTM; only use .txt if no HTML exists (and avoid full-submission if possible)."""
+    """Prefer HTML/HTM; only use .txt if no HTML exists (avoid full-submission when possible)."""
     files = [f for f in dir_path.iterdir() if f.is_file()]
     htmls = [f for f in files if f.suffix.lower() in {".html", ".htm"}]
     if htmls:
@@ -113,14 +113,14 @@ def _best_doc_in_accession(dir_path: Path) -> Optional[Path]:
     txts = [f for f in files if f.suffix.lower() == ".txt"]
     if not txts:
         return None
-    # Avoid full-submission.txt if there is any other large .txt
-    txts.sort(
-        key=lambda p: (
-            0 if "full-submission" in p.name.lower() else 1,  # deprioritize full-submission
-            p.stat().st_size if p.exists() else 0,
-        ),
-        reverse=True,
-    )
+
+    # Deprioritize full-submission.txt vs other large text docs
+    def txt_key(p: Path):
+        is_full = "full-submission" in p.name.lower()
+        size = p.stat().st_size if p.exists() else 0
+        return (0 if not is_full else -1, size)  # non-full first, then by size
+
+    txts.sort(key=txt_key, reverse=True)
     return txts[0]
 
 
@@ -149,7 +149,7 @@ def list_filing_files(
         if best:
             rows.append((year, best))
 
-    # newest year first; if same year, fall back to file mtime
+    # newest year first; if same year, then file mtime
     rows.sort(key=lambda t: (t[0], int(t[1].stat().st_mtime)), reverse=True)
     return [p for _, p in rows]
 
@@ -160,8 +160,8 @@ def list_filing_files(
 def _extract_primary_from_sgml(content: str) -> Optional[str]:
     """
     Parse EDGAR SGML full-submission.txt into sub-documents and return the best <TEXT> block.
-    Preference order: TYPE=10-Q/10-K, then HTML-like, then largest TEXT block.
-    Returns the raw TEXT (could be HTML or plain text).
+    Preference: TYPE 10-Q/10-K, then HTML-like, then largest TEXT block.
+    Returns raw TEXT (HTML or plain).
     """
     s = content.replace("\r\n", "\n").replace("\r", "\n")
     docs = []
@@ -205,7 +205,7 @@ def read_text_from_file(file_path: Path) -> str:
         if sub:
             content = sub
             lower_head = content[:4096].lower()
-            # print(f"ℹ️  Parsed SGML subdocument from {file_path.name}")
+            # print(f"ℹ️ Parsed SGML subdocument from {file_path.name}")
 
     # HTML or HTML-like?
     if ("<html" in lower_head) or ("</table>" in lower_head) or ("</div>" in lower_head):
@@ -232,19 +232,29 @@ def read_text_from_file(file_path: Path) -> str:
 # ---------- TOC handling helpers ----------
 def _strip_table_of_contents(text: str) -> str:
     """
-    Remove Table of Contents to avoid false-positive matches like 'Item 1A ..... 30'.
-    We cut from 'TABLE OF CONTENTS' to the first 'PART I' or 'PART II'. Also drop dot-leader lines.
+    Aggressively remove TOC to avoid false matches like 'Item 1A ..... 30'.
+    1) If 'TABLE OF CONTENTS' exists, cut everything until the first header line:
+       ^(PART [IVXLCDM]+|ITEM 1\.)  (case-insensitive)
+    2) Regardless, drop lines that look like TOC entries with dot leaders + page numbers.
     """
     t = text
     m = re.search(r"table\s+of\s+contents", t, flags=re.IGNORECASE)
     if m:
         after = t[m.end():]
-        mpart = re.search(r"\n\s*part\s+(i|ii)\b", after, flags=re.IGNORECASE)
-        if mpart:
-            t = t[:m.start()] + after[mpart.start():]
+        anchor = re.search(
+            r"^\s*(part\s+[ivxlcdm]+\.?:?|item\s+1\.)",
+            after,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        if anchor:
+            t = t[:m.start()] + after[anchor.start():]
+
+    # Drop dot-leader lines (TOC entries), e.g. "Item 1A. Risk Factors .... 30"
     lines = []
+    toc_line_re = re.compile(r"^\s*item\s+[0-9a-z\.\s]+\.?\s*\.{2,}\s*\d{1,4}\s*$", re.IGNORECASE)
+    dot_leader_re = re.compile(r"\.{2,}\s*\d{1,4}\s*$")
     for line in t.splitlines():
-        if re.search(r"\.{2,}\s*\d{1,4}\s*$", line):
+        if toc_line_re.search(line) or dot_leader_re.search(line):
             continue
         lines.append(line)
     return "\n".join(lines)
@@ -253,9 +263,53 @@ def _strip_table_of_contents(text: str) -> str:
 def _heading_looks_like_toc(heading_line: str) -> bool:
     if re.search(r"\.{2,}\s*\d{1,4}\s*$", heading_line):
         return True
-    if re.search(r"\s\d{1,4}\s*$", heading_line) and len(heading_line) < 120:
+    if re.search(r"\s\d{1,4}\s*$", heading_line) and len(heading_line.strip()) < 120:
         return True
     return False
+
+
+def _looks_like_true_heading(heading_line: str, item: str) -> bool:
+    """
+    Accept only real section headings like:
+      ITEM 1A. RISK FACTORS
+      Item 1A - Risk Factors
+      Item 3. Quantitative and Qualitative Disclosures About Market Risk
+    Reject quoted or in-sentence references (quotes, long lines, trailing page nums).
+    """
+    hl = heading_line.strip()
+    if '"' in hl or "'" in hl:
+        return False
+    if _heading_looks_like_toc(hl):
+        return False
+    if len(hl) > 140:
+        return False
+
+    norm = re.sub(r"\s+", " ", hl.lower())
+    if item == "1a":
+        return bool(re.match(
+            r"^(item\s*1a\.?\s*[-–:]?\s*risk\s*factors\.?)$",
+            norm
+        ))
+    if item == "3":
+        return bool(re.match(
+            r"^(item\s*3\.?\s*[-–:]?\s*quantitative\s+and\s+qualitative\s+disclosures\s+about\s+market\s+risk\.?)$",
+            norm
+        ))
+    return False
+
+
+def _body_looks_like_real_text(body: str) -> bool:
+    """
+    Heuristics to avoid TOC or junk:
+      - allow the canonical "no material changes..." sentence
+      - otherwise require at least 120 chars AND at least one period
+    """
+    b = body.strip()
+    if not b:
+        return False
+    if re.search(r"no\s+material\s+changes\s+to\s+our\s+risk\s+factors", b, re.IGNORECASE):
+        return True
+    return (len(b) >= 120) and ("." in b)
 
 
 def _postprocess_section(text: str) -> Optional[str]:
@@ -263,35 +317,48 @@ def _postprocess_section(text: str) -> Optional[str]:
     return body or None
 
 
-def _first_non_toc_match(text: str, patterns: List[Pattern[str]]) -> Optional[str]:
+def _first_non_toc_match(text: str, patterns: List[Pattern[str]], item_key: str) -> Optional[str]:
     for pat in patterns:
         for m in pat.finditer(text):
-            # Grab the heading line and skip TOC entries
+            # Find the heading line for this match
             span_start = m.start()
             pre_start = text.rfind("\n", 0, span_start) + 1
             heading_line = text[pre_start: text.find("\n", span_start)]
-            if _heading_looks_like_toc(heading_line):
+
+            # Must be a *real* heading at line start (not a cross-ref)
+            if not _looks_like_true_heading(heading_line, item_key):
                 continue
+
             groups = [g for g in m.groups() if isinstance(g, str)]
             body = max((g.strip() for g in groups), key=len, default="")
-            if body:
-                return _postprocess_section(body)
+            if not body:
+                continue
+
+            # reject obvious cross-ref stubs (belt & suspenders)
+            if re.match(r'^(see\s+)?(")?risk\s+factors(")?\b', body.strip().lower()):
+                continue
+
+            if not _body_looks_like_real_text(body):
+                continue
+
+            return _postprocess_section(body)
     return None
 
 
 # ---------- Item 1A (Risk Factors) patterns ----------
 _ITEM_1A_RE: Pattern[str] = re.compile(
     r"""
-    ^\s*item\s*1a\.?\s*[-–:]?\s*risk\s*factors\.?\s*$     # heading
-    (.*?)                                                 # body
-    ^\s*item\s*1b\.?\b|^\s*item\s*2\.?\b|^\s*part\s*ii\b  # next section
+    ^\s*item\s*1a\.?\s*[-–:]?\s*risk\s*factors\.?\s*$   # heading
+    (.*?)                                               # body
+    ^\s*item\s*1b\.?\b|^\s*item\s*2\.?\b|^\s*part\s*ii\b
     """,
     re.IGNORECASE | re.DOTALL | re.MULTILINE | re.VERBOSE,
 )
+# Keep only anchored alternates (remove ultra-permissive unanchored variant)
 _ITEM_1A_ALT: List[Pattern[str]] = [
     re.compile(
         r"""
-        ^\s*item\s*1a\.?\s*(?:[-–:]?\s*)?(?:risk\s*factors.*?)?\s*$  # flexible
+        ^\s*item\s*1a\.?\s*(?:[-–:]?\s*)?(?:risk\s*factors.*?)?\s*$  # flexible heading
         (.*?)                                                        # body
         ^\s*item\s*1b\.?\b|^\s*item\s*2\.?\b|^\s*part\s*ii\b
         """,
@@ -299,15 +366,11 @@ _ITEM_1A_ALT: List[Pattern[str]] = [
     ),
     re.compile(
         r"""
-        ^\s*item\s*1a\b.*?$   # any 1A line
+        ^\s*item\s*1a\b.*?$   # any 1A line (anchored)
         (.*?)                 # body
         ^\s*item\s*1b\b|^\s*item\s*2\b|^\s*part\s*ii\b
         """,
         re.IGNORECASE | re.DOTALL | re.MULTILINE | re.VERBOSE,
-    ),
-    re.compile(
-        r"item\s*1a.*?(risk\s*factors.*?)?(.*?)(?=item\s*1b\b|item\s*2\b|part\s*ii\b)",
-        re.IGNORECASE | re.DOTALL,
     ),
 ]
 
@@ -332,33 +395,21 @@ _ITEM_3_ALT: List[Pattern[str]] = [
 ]
 
 
-def _extract_with_patterns(text: str, pats: List[Pattern[str]]) -> Optional[str]:
-    return _first_non_toc_match(text, pats)
-
-
 def extract_item_1a(text: str) -> Optional[str]:
-    if not text:
-        return None
     cleaned = _strip_table_of_contents(text)
-    body = _extract_with_patterns(cleaned, [_ITEM_1A_RE] + _ITEM_1A_ALT)
+    body = _first_non_toc_match(cleaned, [_ITEM_1A_RE] + _ITEM_1A_ALT, item_key="1a")
     if body:
         return body
     # Minimalist 10-Q language:
-    nm = re.search(
-        r"no\s+material\s+changes\s+to\s+our\s+risk\s+factors",
-        cleaned,
-        re.IGNORECASE,
-    )
+    nm = re.search(r"no\s+material\s+changes\s+to\s+our\s+risk\s+factors", cleaned, re.IGNORECASE)
     if nm:
         return "No material changes to our risk factors since the most recent Form 10-K."
     return None
 
 
 def extract_item_3(text: str) -> Optional[str]:
-    if not text:
-        return None
     cleaned = _strip_table_of_contents(text)
-    return _extract_with_patterns(cleaned, [_ITEM_3_RE] + _ITEM_3_ALT)
+    return _first_non_toc_match(cleaned, [_ITEM_3_RE] + _ITEM_3_ALT, item_key="3")
 
 
 def _safe_extract(path: Path, extractor: Callable[[str], Optional[str]]) -> Optional[str]:

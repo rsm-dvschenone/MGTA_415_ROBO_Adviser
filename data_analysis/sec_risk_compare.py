@@ -42,6 +42,23 @@ from typing import Dict, Any, List, Optional, Tuple, Iterable
 from collections import Counter
 import pandas as pd
 
+
+##ADDED IN BY DOM HERE
+from data_collection.SEC_Edgar_Downloader import prepare_compare_payload
+
+current_text, previous_text, meta_curr, meta_prev = prepare_compare_payload(
+    ticker="NVDA",
+    form="10-Q",
+    email="dvschenone@ucsd.edu",
+    section_preference="auto",   # "auto" (10-Q: 1A→Item3), or "risk", or "item3"
+    min_year=2019,
+)
+def compare_sec_risk_sections(current_text, previous_text, metadata_current, metadata_previous):
+    # your logic here
+    ...
+    
+result = compare_sec_risk_sections(current_text, previous_text, meta_curr.__dict__, meta_prev.__dict__)
+
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z\-']+")
 _SENT_SPLIT = re.compile(r"(?<=[\.!?])\s+")
 
