@@ -4,9 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
-env/
-venv/
-*.env
+
 
 # === Jupyter Notebooks (checkpoint files) ===
 .ipynb_checkpoints
