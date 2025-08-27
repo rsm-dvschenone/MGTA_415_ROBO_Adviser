@@ -9,6 +9,7 @@ Fetches articles from NewsAPI.org and returns them in the normalized schema:
 - published_at (str) REQUIRED ISO8601 UTC (with trailing 'Z')
 - url (str)          REQUIRED
 """
+api_key = '0099e62b0d23445e8be391a4e96b4810'
 
 from newsapi import NewsApiClient
 from datetime import datetime, timedelta, timezone
