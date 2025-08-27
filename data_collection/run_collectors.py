@@ -34,31 +34,14 @@ import json
 from pathlib import Path
 from dataclasses import asdict
 
-# ---------- make project imports work regardless of where this file lives ----------
-ROOT = Path(__file__).resolve().parent
-# your collectors live under: data/data_collection/
-sys.path.append(str(ROOT / "data"))  # so we can import data_collection.*
+# ---------- paths ----------
+ROOT = Path(__file__).resolve().parent              # .../data_collection
+sys.path.append(str(ROOT.parent))                   # add project root so 'data_collection.*' imports work
 
-# NewsAPI (your file is data/data_collection/newapi.py)
-try:
-    from data_collection.newapi import fetch_news
-except ModuleNotFoundError:
-    # fallback if you later rename to collectors/newsapi.py, etc.
-    from data_collection.newsapi import fetch_news  # type: ignore
-
-# Reddit (your file is data/data_collection/reddit.py)
-try:
-    from data_collection.reddit import collect as collect_reddit
-except ModuleNotFoundError:
-    from data_collection.reddit_posts import collect as collect_reddit  # type: ignore
-
-# yfinance (your file is data/data_collection/yfinance.py)
-try:
-    from data_collection.yfinance import collect as collect_prices
-except ModuleNotFoundError:
-    from data_collection.yfinance_stock import collect as collect_prices  # type: ignore
-
-# SEC (your file is data/data_collection/SEC_Edgar_Downloader.py)
+# ---------- imports from your package ----------
+from data_collection.newapi import fetch_news
+from data_collection.reddit import collect as collect_reddit
+from data_collection.yfinance import collect as collect_prices
 from data_collection.SEC_Edgar_Downloader import prepare_compare_payload
 
 
@@ -82,8 +65,8 @@ def main() -> None:
     if not news_api_key:
         raise SystemExit("Missing NEWSAPI_KEY env var.")
 
-    # Keep EDGAR downloads under your repo: data/data_collection/sec-edgar-filings/
-    sec_data_dir = ROOT / "data" / "data_collection" / "sec-edgar-filings"
+    # Keep EDGAR downloads under your repo: data_collection/sec-edgar-filings/
+    sec_data_dir = ROOT / "sec-edgar-filings"
     sec_data_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------ 1) NewsAPI articles ------------
@@ -135,11 +118,27 @@ def main() -> None:
     (ROOT / "sec_sections.json").write_text(json.dumps(sec_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print("✅ Wrote:")
-    print(" - articles.json")
-    print(" - reddit_posts.json")
-    print(" - prices.csv")
-    print(" - sec_sections.json")
+    print(" -", (ROOT / "articles.json").name)
+    print(" -", (ROOT / "reddit_posts.json").name)
+    print(" -", (ROOT / "prices.csv").name)
+    print(" -", (ROOT / "sec_sections.json").name)
 
 
 if __name__ == "__main__":
     main()
+
+
+# deps
+pip install newsapi-python praw yfinance pandas numpy sec-edgar-downloader beautifulsoup4 lxml
+
+# env
+export NEWSAPI_KEY=...
+export REDDIT_CLIENT_ID=...
+export REDDIT_CLIENT_SECRET=...
+export REDDIT_USER_AGENT=nvda-bot
+export REDDIT_USERNAME=...
+export REDDIT_PASSWORD=...
+export SEC_CONTACT_EMAIL=you@example.com
+
+# run
+python data_collection/run_collectors.py
