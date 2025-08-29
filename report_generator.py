@@ -68,26 +68,26 @@ def send_slack_message(report_str):
 
 
 # notifier_sms.py
-import os
-from twilio.rest import Client
-from dotenv import load_dotenv
+# import os
+# from twilio.rest import Client
+# from dotenv import load_dotenv
 
-load_dotenv()
+# load_dotenv()
 
-def send_sms_via_twilio(report_str):
-    account_sid = os.getenv("TWILIO_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    from_number = os.getenv("TWILIO_PHONE")
-    to_number = os.getenv("MY_PHONE")
+# def send_sms_via_twilio(report_str):
+#     account_sid = os.getenv("TWILIO_SID")
+#     auth_token = os.getenv("TWILIO_AUTH_TOKEN")
+#     from_number = os.getenv("TWILIO_PHONE")
+#     to_number = os.getenv("MY_PHONE")
 
-    client = Client(account_sid, auth_token)
+#     client = Client(account_sid, auth_token)
 
-    try:
-        message = client.messages.create(
-            body=report_str[:1600],  # SMS limit
-            from_=from_number,
-            to=to_number
-        )
-        print("✅ SMS sent.")
-    except Exception as e:
-        print("❌ SMS failed:", e)
+#     try:
+#         message = client.messages.create(
+#             body=report_str[:1600],  # SMS limit
+#             from_=from_number,
+#             to=to_number
+#         )
+#         print("✅ SMS sent.")
+#     except Exception as e:
+#         print("❌ SMS failed:", e)
