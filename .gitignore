@@ -5,15 +5,15 @@ __pycache__/
 *.pyd
 .Python
 
+# Virtual environments
+.venv/
+venv/
 
 # === Jupyter Notebooks (checkpoint files) ===
-.ipynb_checkpoints
+.ipynb_checkpoints/
 
 # === VSCode ===
 .vscode/
-
-# === Secrets ===
-
 
 # === OS/System files ===
 .DS_Store
@@ -23,23 +23,21 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
-/storage/models/
 outputs/
+models/
+storage/models/
+!.gitkeep
+
+# === Secrets ===
 .env
+
+# === ML Models / Checkpoints ===
 *.bin
 *.safetensors
 *.pt
 *.onnx
 
-models/
-outputs/
-!.gitkeep
-.env
-**/__pycache__/
-*.pyc
-.ipynb_checkpoints/
-.DS_Store
-*.safetensors
-*.bin
-*.pt
-*.onnx
+# === Hugging Face / Transformers cache ===
+huggingface/
+.cache/
+
